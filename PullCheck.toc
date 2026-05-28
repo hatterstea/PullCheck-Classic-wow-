@@ -1,0 +1,9 @@
+## Interface: 20505
+## Title: PullCheck
+## Notes: Customizable checklist that appears when a ready check is performed.
+## Author: hatters{Ally}
+## Version: 1.0.0
+## SavedVariables: PullCheckDB
+## SavedVariablesPerCharacter: PullCheckCharDB
+
+PullCheck.lua
