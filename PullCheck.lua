@@ -1,3 +1,4 @@
+--pullcheck.lua--
 local defaults = {
     "Soulstone on cooldown?",
     "Ritual of Souls down?",
@@ -227,6 +228,38 @@ local function GetItemSpellID(item)
     return nil
 end
 
+local function GetActivePresets()
+    return PullCheckPresets_TBC or {}
+end
+
+local function GetPresetByKey(presetKey)
+    if not presetKey then
+        return nil
+    end
+
+    return GetActivePresets()[presetKey]
+end
+
+local function GetFirstPresetKey()
+    local keys = {}
+
+    for key in pairs(GetActivePresets()) do
+        table.insert(keys, key)
+    end
+
+    table.sort(keys)
+
+    return keys[1]
+end
+
+local function GetItemPresetKey(item)
+    if type(item) == "table" then
+        return item.presetKey
+    end
+
+    return nil
+end
+
 local function GetSpellIconByID(spellID)
     spellID = tonumber(spellID)
 
@@ -320,6 +353,20 @@ local function IsTrackedItemComplete(item)
         return PlayerHasAuraBySpellID(GetItemSpellID(item))
     end
 
+    if trackType == "preset" then
+        local preset = GetPresetByKey(GetItemPresetKey(item))
+
+        if not preset or type(preset.spellIDs) ~= "table" then
+            return false
+        end
+
+        for _, spellID in ipairs(preset.spellIDs) do
+            if PlayerHasAuraBySpellID(spellID) then
+                return true
+            end
+        end
+    end
+
     return false
 end
 
@@ -354,8 +401,35 @@ local function UpdateChecklistVisuals()
 
             row.label:ClearAllPoints()
 
-            if trackType == "spellID" then
-                local auraInfo = GetPlayerAuraInfoBySpellID(GetItemSpellID(item))
+            if trackType == "spellID" or trackType == "preset" then
+                local auraInfo
+
+                if trackType == "preset" then
+                    local preset = GetPresetByKey(GetItemPresetKey(item))
+
+                    auraInfo = {
+                        found = false,
+                        icon = nil,
+                        remaining = nil
+                    }
+
+                    if preset and type(preset.spellIDs) == "table" then
+                        for _, spellID in ipairs(preset.spellIDs) do
+                            local testAura = GetPlayerAuraInfoBySpellID(spellID)
+
+                            if testAura.icon and not auraInfo.icon then
+                                auraInfo.icon = testAura.icon
+                            end
+
+                            if testAura.found then
+                                auraInfo = testAura
+                                break
+                            end
+                        end
+                    end
+                else
+                    auraInfo = GetPlayerAuraInfoBySpellID(GetItemSpellID(item))
+                end
 
                 if auraInfo.icon then
                     row.icon:SetTexture(auraInfo.icon)
@@ -518,10 +592,19 @@ local function RefreshConfigList()
         row.typeText:SetText(GetItemTrackingLabel(item))
         row.itemText:SetText(GetItemText(item))
 
+        local trackType = GetItemTrackingType(item)
         local spellID = GetItemSpellID(item)
 
         if spellID then
             row.spellIDText:SetText("ID: " .. spellID)
+        elseif trackType == "preset" then
+            local preset = GetPresetByKey(GetItemPresetKey(item))
+
+            if preset then
+                row.spellIDText:SetText(preset.name)
+            else
+                row.spellIDText:SetText("No preset")
+            end
         else
             row.spellIDText:SetText("")
         end
@@ -607,6 +690,34 @@ local function ConfirmDeleteProfile(profileName)
     StaticPopup_Show("PULLCHECK_DELETE_PROFILE", profileName, nil, profileName)
 end
 
+local function PresetDropDown_Initialize(self, level)
+    local presets = GetActivePresets()
+    local keys = {}
+
+    for key in pairs(presets) do
+        table.insert(keys, key)
+    end
+
+    table.sort(keys)
+
+    for _, key in ipairs(keys) do
+        local preset = presets[key]
+        local info = UIDropDownMenu_CreateInfo()
+
+        info.text = preset.name or key
+        info.value = key
+        info.checked = itemEditorFrame and itemEditorFrame.selectedPresetKey == key
+
+        info.func = function()
+            itemEditorFrame.selectedPresetKey = key
+            UIDropDownMenu_SetText(itemEditorFrame.presetDropdown, preset.name or key)
+            CloseDropDownMenus()
+        end
+
+        UIDropDownMenu_AddButton(info, level)
+    end
+end
+
 local function CreateItemEditorFrame()
     itemEditorFrame = CreateFrame("Frame", "PullCheckItemEditorFrame", UIParent, "BackdropTemplate")
     itemEditorFrame:SetSize(430, 320)
@@ -680,11 +791,17 @@ local function CreateItemEditorFrame()
     itemEditorFrame.spellIDBox:SetPoint("LEFT", spellIDLabel, "RIGHT", 10, 0)
     itemEditorFrame.spellIDBox:SetAutoFocus(false)
 
+    itemEditorFrame.presetDropdown = CreateFrame("Frame", "PullCheckPresetDropdown", itemEditorFrame, "UIDropDownMenuTemplate")
+    itemEditorFrame.presetDropdown:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 112, -182)
+    UIDropDownMenu_SetWidth(itemEditorFrame.presetDropdown, 220)
+    UIDropDownMenu_Initialize(itemEditorFrame.presetDropdown, PresetDropDown_Initialize)
+    itemEditorFrame.presetDropdown:Hide()
+
     local presetNote = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
-    presetNote:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 132, -190)
+    presetNote:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 132, -214)
     presetNote:SetWidth(250)
     presetNote:SetJustifyH("LEFT")
-    presetNote:SetText("Preset dropdown will go here later.")
+    presetNote:SetText("")
 
     local modeNote = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     modeNote:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 32, -226)
@@ -701,16 +818,33 @@ local function CreateItemEditorFrame()
         if mode == "spellID" then
             spellIDLabel:Show()
             itemEditorFrame.spellIDBox:Show()
+            itemEditorFrame.presetDropdown:Hide()
             presetNote:Hide()
-            modeNote:SetText("Spell ID tracking will be added later. For now, this is just a GUI option.")
         elseif mode == "preset" then
             spellIDLabel:Hide()
             itemEditorFrame.spellIDBox:Hide()
+
+            itemEditorFrame.presetDropdown:Show()
+
+            local presetKey = itemEditorFrame.selectedPresetKey or GetFirstPresetKey()
+            itemEditorFrame.selectedPresetKey = presetKey
+
+            local preset = GetPresetByKey(presetKey)
+
+            if preset then
+                UIDropDownMenu_SetText(itemEditorFrame.presetDropdown, preset.name or presetKey)
+                presetNote:SetText("")
+            else
+                UIDropDownMenu_SetText(itemEditorFrame.presetDropdown, "No presets found")
+                presetNote:SetText("No presets are currently loaded.")
+            end
+
             presetNote:Show()
-            modeNote:SetText("Preset selection will be added later. For now, this is just a GUI option.")
+            modeNote:SetText("Preset items use built-in spell IDs from the loaded preset file.")
         else
             spellIDLabel:Hide()
             itemEditorFrame.spellIDBox:Hide()
+            itemEditorFrame.presetDropdown:Hide()
             presetNote:Hide()
             modeNote:SetText("Manual items are checked off by clicking them in the checklist.")
         end
@@ -781,7 +915,14 @@ local function CreateItemEditorFrame()
         end
 
         if trackType == "preset" then
-            newItem.presetKey = nil
+            local presetKey = itemEditorFrame.selectedPresetKey or GetFirstPresetKey()
+
+            if not presetKey or not GetPresetByKey(presetKey) then
+                print("PullCheck: choose a valid preset.")
+                return
+            end
+
+            newItem.presetKey = presetKey
         end
 
         table.insert(GetItems(), newItem)
@@ -809,6 +950,18 @@ local function ShowItemEditor(text)
         itemEditorFrame.spellIDBox:SetText("")
     end
 
+    itemEditorFrame.selectedPresetKey = GetFirstPresetKey()
+
+    if itemEditorFrame.presetDropdown then
+        local preset = GetPresetByKey(itemEditorFrame.selectedPresetKey)
+
+        if preset then
+            UIDropDownMenu_SetText(itemEditorFrame.presetDropdown, preset.name)
+        else
+            UIDropDownMenu_SetText(itemEditorFrame.presetDropdown, "No presets found")
+        end
+    end
+    
     if itemEditorFrame.SetTrackingMode then
         itemEditorFrame.SetTrackingMode("manual")
     end
@@ -940,7 +1093,7 @@ local function CreateConfigFrame()
 
     local spellIDHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     spellIDHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 500, -224)
-    spellIDHeader:SetText("Spell ID")
+    spellIDHeader:SetText("Details")
 
     configFrame.scrollFrame = CreateFrame("ScrollFrame", "PullCheckItemScrollFrame", configFrame, "UIPanelScrollFrameTemplate")
     configFrame.scrollFrame:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -252)
