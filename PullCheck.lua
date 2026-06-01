@@ -219,6 +219,181 @@ local function GetItemTrackingLabel(item)
     return "[Manual]"
 end
 
+local function GetItemSpellID(item)
+    if type(item) == "table" then
+        return item.spellID
+    end
+
+    return nil
+end
+
+local function GetSpellIconByID(spellID)
+    spellID = tonumber(spellID)
+
+    if not spellID then
+        return nil
+    end
+
+    local name, rank, icon = GetSpellInfo(spellID)
+
+    if icon then
+        return icon
+    end
+
+    return nil
+end
+
+local function FormatTimeRemaining(seconds)
+    if not seconds then
+        return ""
+    end
+
+    seconds = math.max(0, math.floor(seconds + 0.5))
+
+    if seconds >= 3600 then
+        local hours = math.floor(seconds / 3600)
+        local minutes = math.floor((seconds % 3600) / 60)
+
+        return string.format("%dh %02dm", hours, minutes)
+    end
+
+    if seconds >= 60 then
+        local minutes = math.floor(seconds / 60)
+        local remainingSeconds = seconds % 60
+
+        return string.format("%dm %02ds", minutes, remainingSeconds)
+    end
+
+    return seconds .. "s"
+end
+
+local function GetPlayerAuraInfoBySpellID(spellID)
+    spellID = tonumber(spellID)
+
+    if not spellID then
+        return {
+            found = false,
+            icon = nil,
+            remaining = nil
+        }
+    end
+
+    for i = 1, 40 do
+        local name, icon, count, debuffType, duration, expirationTime, source, isStealable, nameplateShowPersonal, auraSpellID = UnitAura("player", i, "HELPFUL")
+
+        if not name then
+            break
+        end
+
+        if auraSpellID == spellID then
+            local remaining = nil
+
+            if expirationTime and expirationTime > 0 then
+                remaining = expirationTime - GetTime()
+            end
+
+            return {
+                found = true,
+                icon = icon or GetSpellIconByID(spellID),
+                duration = duration,
+                expirationTime = expirationTime,
+                remaining = remaining
+            }
+        end
+    end
+
+    return {
+        found = false,
+        icon = GetSpellIconByID(spellID),
+        remaining = nil
+    }
+end
+
+local function PlayerHasAuraBySpellID(spellID)
+    return GetPlayerAuraInfoBySpellID(spellID).found
+end
+
+local function IsTrackedItemComplete(item)
+    local trackType = GetItemTrackingType(item)
+
+    if trackType == "spellID" then
+        return PlayerHasAuraBySpellID(GetItemSpellID(item))
+    end
+
+    return false
+end
+
+local function AllChecklistItemsResolved()
+    local items = GetItems()
+
+    for i, item in ipairs(items) do
+        if IsTrackedItemComplete(item) then
+            -- tracked item is complete
+        elseif checklistRows[i] and not checklistRows[i]:IsShown() then
+            -- manual item was clicked off
+        else
+            return false
+        end
+    end
+
+    return true
+end
+
+local function UpdateChecklistVisuals()
+    local items = GetItems()
+
+    for i, item in ipairs(items) do
+        local row = checklistRows[i]
+
+        if row then
+            local trackType = GetItemTrackingType(item)
+
+            row.label:SetText(GetItemText(item))
+            row.timeText:SetText("")
+            row.icon:Hide()
+
+            row.label:ClearAllPoints()
+
+            if trackType == "spellID" then
+                local auraInfo = GetPlayerAuraInfoBySpellID(GetItemSpellID(item))
+
+                if auraInfo.icon then
+                    row.icon:SetTexture(auraInfo.icon)
+                    row.icon:Show()
+                    row.label:SetPoint("LEFT", row.icon, "RIGHT", 6, 0)
+                else
+                    row.label:SetPoint("LEFT", row.box, "RIGHT", 6, 0)
+                end
+
+                row.label:SetPoint("RIGHT", row.timeText, "LEFT", -8, 0)
+
+                if auraInfo.found then
+                    row.box:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+                    row.label:SetTextColor(0.2, 1, 0.2)
+
+                    if auraInfo.remaining then
+                        row.timeText:SetText(FormatTimeRemaining(auraInfo.remaining))
+                        row.timeText:SetTextColor(0.2, 1, 0.2)
+                    else
+                        row.timeText:SetText("active")
+                        row.timeText:SetTextColor(0.2, 1, 0.2)
+                    end
+                else
+                    row.box:SetTexture("Interface\\Buttons\\UI-CheckBox-Up")
+                    row.label:SetTextColor(1, 0.25, 0.25)
+                    row.timeText:SetText("missing")
+                    row.timeText:SetTextColor(1, 0.25, 0.25)
+                end
+            else
+                row.box:SetTexture("Interface\\Buttons\\UI-CheckBox-Up")
+                row.label:SetTextColor(1, 1, 1)
+                row.label:SetPoint("LEFT", row.box, "RIGHT", 6, 0)
+                row.label:SetPoint("RIGHT", row.timeText, "LEFT", -8, 0)
+            end
+        end
+    end
+end
+
 local function RefreshChecklist()
     if not checklistFrame then
         CreateChecklistFrame()
@@ -243,9 +418,20 @@ local function RefreshChecklist()
             row.box:SetSize(24, 24)
             row.box:SetPoint("LEFT", row, "LEFT", 0, 0)
 
+            row.icon = row:CreateTexture(nil, "ARTWORK")
+            row.icon:SetSize(20, 20)
+            row.icon:SetPoint("LEFT", row.box, "RIGHT", 6, 0)
+            row.icon:Hide()
+
+            row.timeText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            row.timeText:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            row.timeText:SetWidth(72)
+            row.timeText:SetJustifyH("RIGHT")
+            row.timeText:SetText("")
+
             row.label = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             row.label:SetPoint("LEFT", row.box, "RIGHT", 6, 0)
-            row.label:SetPoint("RIGHT", row, "RIGHT", -4, 0)
+            row.label:SetPoint("RIGHT", row.timeText, "LEFT", -8, 0)
             row.label:SetJustifyH("LEFT")
 
             row:SetHighlightTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
@@ -253,7 +439,7 @@ local function RefreshChecklist()
             row:SetScript("OnClick", function(self)
                 self:Hide()
 
-                if AllChecklistRowsHidden() then
+                if AllChecklistItemsResolved() then
                     checklistFrame:Hide()
                 end
             end)
@@ -263,10 +449,11 @@ local function RefreshChecklist()
 
         local row = checklistRows[i]
         row:SetPoint("TOPLEFT", checklistFrame, "TOPLEFT", 36, -48 - ((i - 1) * 32))
-        row.label:SetText(GetItemText(item))
+
         row:Show()
     end
 
+    UpdateChecklistVisuals()
     checklistFrame:Show()
 end
 
@@ -307,8 +494,13 @@ local function RefreshConfigList()
 
             row.itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
             row.itemText:SetPoint("LEFT", row.typeText, "RIGHT", 8, 0)
-            row.itemText:SetWidth(340)
+            row.itemText:SetWidth(270)
             row.itemText:SetJustifyH("LEFT")
+
+            row.spellIDText = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+            row.spellIDText:SetPoint("LEFT", row.itemText, "RIGHT", 10, 0)
+            row.spellIDText:SetWidth(90)
+            row.spellIDText:SetJustifyH("LEFT")
 
             row.deleteButton = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
             row.deleteButton:SetSize(54, 22)
@@ -325,6 +517,14 @@ local function RefreshConfigList()
         row.indexText:SetText(index .. ".")
         row.typeText:SetText(GetItemTrackingLabel(item))
         row.itemText:SetText(GetItemText(item))
+
+        local spellID = GetItemSpellID(item)
+
+        if spellID then
+            row.spellIDText:SetText("ID: " .. spellID)
+        else
+            row.spellIDText:SetText("")
+        end
 
         row.deleteButton:SetScript("OnClick", function()
             table.remove(GetItems(), index)
@@ -554,24 +754,37 @@ local function CreateItemEditorFrame()
             return
         end
 
+        local trackType = itemEditorFrame.trackingMode or "manual"
+
         local newItem = {
             text = text,
-            trackType = itemEditorFrame.trackingMode or "manual"
+            trackType = trackType
         }
 
-        if newItem.trackType == "spellID" and itemEditorFrame.spellIDBox then
-            local spellID = tonumber(itemEditorFrame.spellIDBox:GetText() or "")
+        if trackType == "spellID" then
+            local spellIDText = ""
 
-            if spellID then
-                newItem.spellID = spellID
+            if itemEditorFrame.spellIDBox then
+                spellIDText = itemEditorFrame.spellIDBox:GetText() or ""
             end
+
+            spellIDText = spellIDText:gsub("^%s+", ""):gsub("%s+$", "")
+
+            local spellID = tonumber(spellIDText)
+
+            if not spellID then
+                print("PullCheck: enter a valid Spell ID.")
+                return
+            end
+
+            newItem.spellID = spellID
+        end
+
+        if trackType == "preset" then
+            newItem.presetKey = nil
         end
 
         table.insert(GetItems(), newItem)
-
-        if configFrame and configFrame.inputBox then
-            configFrame.inputBox:SetText("")
-        end
 
         itemEditorFrame:Hide()
         RefreshConfigList()
@@ -725,6 +938,10 @@ local function CreateConfigFrame()
     itemHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 156, -224)
     itemHeader:SetText("Item")
 
+    local spellIDHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    spellIDHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 500, -224)
+    spellIDHeader:SetText("Spell ID")
+
     configFrame.scrollFrame = CreateFrame("ScrollFrame", "PullCheckItemScrollFrame", configFrame, "UIPanelScrollFrameTemplate")
     configFrame.scrollFrame:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -252)
     configFrame.scrollFrame:SetPoint("BOTTOMRIGHT", configFrame, "BOTTOMRIGHT", -48, 28)
@@ -762,6 +979,7 @@ end
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("READY_CHECK")
 eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+eventFrame:RegisterEvent("UNIT_AURA")
 
 local function HidePullCheckFrames()
     if checklistFrame then
@@ -774,6 +992,10 @@ local function HidePullCheckFrames()
 end
 
 local function ShowPullCheckWithSound()
+    if InCombatLockdown and InCombatLockdown() then
+        return
+    end
+
     RefreshChecklist()
 
     if PlaySound then
@@ -781,7 +1003,7 @@ local function ShowPullCheckWithSound()
     end
 end
 
-eventFrame:SetScript("OnEvent", function(self, event)
+eventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "READY_CHECK" then
         ShowPullCheckWithSound()
         return
@@ -789,6 +1011,20 @@ eventFrame:SetScript("OnEvent", function(self, event)
 
     if event == "PLAYER_REGEN_DISABLED" then
         HidePullCheckFrames()
+        return
+    end
+
+    if event == "UNIT_AURA" then
+        local unit = ...
+
+        if InCombatLockdown and InCombatLockdown() then
+            return
+        end
+
+        if unit == "player" and checklistFrame and checklistFrame:IsShown() then
+            UpdateChecklistVisuals()
+        end
+
         return
     end
 end)
@@ -814,6 +1050,11 @@ SlashCmdList["PULLCHECK"] = function(msg)
     end
 
     if command == "show" then
+        if InCombatLockdown and InCombatLockdown() then
+            print("PullCheck: checklist is disabled during combat.")
+            return
+        end
+
         RefreshChecklist()
         return
     end
