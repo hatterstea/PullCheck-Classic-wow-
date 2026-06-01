@@ -5,12 +5,13 @@ local defaults = {
     "Wizard oil applied?",
     "Flask active?",
     "Pet Summoned",
-    "Enough soul shards?",
     "Focus set?"
 }
 
 local checklistFrame
 local configFrame
+local itemEditorFrame
+
 local checklistRows = {}
 local configRows = {}
 
@@ -188,6 +189,36 @@ local function CreateChecklistFrame()
     end)
 end
 
+local function GetItemText(item)
+    if type(item) == "table" then
+        return item.text or ""
+    end
+
+    return item or ""
+end
+
+local function GetItemTrackingType(item)
+    if type(item) == "table" then
+        return item.trackType or "manual"
+    end
+
+    return "manual"
+end
+
+local function GetItemTrackingLabel(item)
+    local trackType = GetItemTrackingType(item)
+
+    if trackType == "spellID" then
+        return "[Spell ID]"
+    end
+
+    if trackType == "preset" then
+        return "[Preset]"
+    end
+
+    return "[Manual]"
+end
+
 local function RefreshChecklist()
     if not checklistFrame then
         CreateChecklistFrame()
@@ -232,7 +263,7 @@ local function RefreshChecklist()
 
         local row = checklistRows[i]
         row:SetPoint("TOPLEFT", checklistFrame, "TOPLEFT", 36, -48 - ((i - 1) * 32))
-        row.label:SetText(item)
+        row.label:SetText(GetItemText(item))
         row:Show()
     end
 
@@ -269,9 +300,14 @@ local function RefreshConfigList()
             row.indexText:SetWidth(34)
             row.indexText:SetJustifyH("RIGHT")
 
+            row.typeText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            row.typeText:SetPoint("LEFT", row.indexText, "RIGHT", 10, 0)
+            row.typeText:SetWidth(72)
+            row.typeText:SetJustifyH("LEFT")
+
             row.itemText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-            row.itemText:SetPoint("LEFT", row.indexText, "RIGHT", 10, 0)
-            row.itemText:SetWidth(420)
+            row.itemText:SetPoint("LEFT", row.typeText, "RIGHT", 8, 0)
+            row.itemText:SetWidth(340)
             row.itemText:SetJustifyH("LEFT")
 
             row.deleteButton = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
@@ -287,7 +323,8 @@ local function RefreshConfigList()
 
         row:SetPoint("TOPLEFT", configFrame.scrollChild, "TOPLEFT", 0, -((i - 1) * 30))
         row.indexText:SetText(index .. ".")
-        row.itemText:SetText(item)
+        row.typeText:SetText(GetItemTrackingLabel(item))
+        row.itemText:SetText(GetItemText(item))
 
         row.deleteButton:SetScript("OnClick", function()
             table.remove(GetItems(), index)
@@ -370,6 +407,223 @@ local function ConfirmDeleteProfile(profileName)
     StaticPopup_Show("PULLCHECK_DELETE_PROFILE", profileName, nil, profileName)
 end
 
+local function CreateItemEditorFrame()
+    itemEditorFrame = CreateFrame("Frame", "PullCheckItemEditorFrame", UIParent, "BackdropTemplate")
+    itemEditorFrame:SetSize(430, 320)
+    itemEditorFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 90)
+    itemEditorFrame:SetFrameStrata("FULLSCREEN_DIALOG")
+    itemEditorFrame:SetFrameLevel(100)
+    itemEditorFrame:SetToplevel(true)
+    itemEditorFrame:SetClampedToScreen(true)
+    itemEditorFrame:Hide()
+
+    ApplyPanelBackdrop(itemEditorFrame)
+
+    itemEditorFrame:SetBackdropColor(0, 0, 0, 1)
+    itemEditorFrame:SetBackdropBorderColor(1, 1, 1, 0.85)
+
+    itemEditorFrame.opaqueBackground = itemEditorFrame:CreateTexture(nil, "BACKGROUND")
+    itemEditorFrame.opaqueBackground:SetTexture("Interface\\Buttons\\WHITE8x8")
+    itemEditorFrame.opaqueBackground:SetVertexColor(0, 0, 0, 0.96)
+    itemEditorFrame.opaqueBackground:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 12, -12)
+    itemEditorFrame.opaqueBackground:SetPoint("BOTTOMRIGHT", itemEditorFrame, "BOTTOMRIGHT", -12, 12)
+
+    MakeDraggable(itemEditorFrame)
+
+    local title = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", itemEditorFrame, "TOP", 0, -18)
+    title:SetText("New Checklist Item")
+
+    local closeButton = CreateFrame("Button", nil, itemEditorFrame, "UIPanelCloseButton")
+    closeButton:SetPoint("TOPRIGHT", itemEditorFrame, "TOPRIGHT", -6, -6)
+    closeButton:SetScript("OnClick", function()
+        itemEditorFrame:Hide()
+    end)
+
+    local nameLabel = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    nameLabel:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 32, -60)
+    nameLabel:SetText("Name:")
+
+    itemEditorFrame.nameBox = CreateFrame("EditBox", nil, itemEditorFrame, "InputBoxTemplate")
+    itemEditorFrame.nameBox:SetSize(300, 24)
+    itemEditorFrame.nameBox:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 92, -54)
+    itemEditorFrame.nameBox:SetAutoFocus(false)
+
+    local trackingLabel = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    trackingLabel:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 32, -100)
+    trackingLabel:SetText("Tracking:")
+
+    local SetTrackingMode
+
+    local function CreateTrackingOption(label, yOffset)
+        local button = CreateFrame("CheckButton", nil, itemEditorFrame, "UICheckButtonTemplate")
+        button:SetSize(24, 24)
+        button:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 112, yOffset)
+
+        button.label = button:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        button.label:SetPoint("LEFT", button, "RIGHT", 4, 0)
+        button.label:SetText(label)
+
+        return button
+    end
+
+    itemEditorFrame.manualOption = CreateTrackingOption("Manual", -94)
+    itemEditorFrame.spellIDOption = CreateTrackingOption("Spell ID", -124)
+    itemEditorFrame.presetOption = CreateTrackingOption("Preset", -154)
+
+    local spellIDLabel = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    spellIDLabel:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 132, -190)
+    spellIDLabel:SetText("Spell ID:")
+
+    itemEditorFrame.spellIDBox = CreateFrame("EditBox", nil, itemEditorFrame, "InputBoxTemplate")
+    itemEditorFrame.spellIDBox:SetSize(160, 24)
+    itemEditorFrame.spellIDBox:SetPoint("LEFT", spellIDLabel, "RIGHT", 10, 0)
+    itemEditorFrame.spellIDBox:SetAutoFocus(false)
+
+    local presetNote = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    presetNote:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 132, -190)
+    presetNote:SetWidth(250)
+    presetNote:SetJustifyH("LEFT")
+    presetNote:SetText("Preset dropdown will go here later.")
+
+    local modeNote = itemEditorFrame:CreateFontString(nil, "OVERLAY", "GameFontDisable")
+    modeNote:SetPoint("TOPLEFT", itemEditorFrame, "TOPLEFT", 32, -226)
+    modeNote:SetWidth(360)
+    modeNote:SetJustifyH("LEFT")
+
+    SetTrackingMode = function(mode)
+        itemEditorFrame.trackingMode = mode
+
+        itemEditorFrame.manualOption:SetChecked(mode == "manual")
+        itemEditorFrame.spellIDOption:SetChecked(mode == "spellID")
+        itemEditorFrame.presetOption:SetChecked(mode == "preset")
+
+        if mode == "spellID" then
+            spellIDLabel:Show()
+            itemEditorFrame.spellIDBox:Show()
+            presetNote:Hide()
+            modeNote:SetText("Spell ID tracking will be added later. For now, this is just a GUI option.")
+        elseif mode == "preset" then
+            spellIDLabel:Hide()
+            itemEditorFrame.spellIDBox:Hide()
+            presetNote:Show()
+            modeNote:SetText("Preset selection will be added later. For now, this is just a GUI option.")
+        else
+            spellIDLabel:Hide()
+            itemEditorFrame.spellIDBox:Hide()
+            presetNote:Hide()
+            modeNote:SetText("Manual items are checked off by clicking them in the checklist.")
+        end
+    end
+
+    itemEditorFrame.manualOption:SetScript("OnClick", function()
+        SetTrackingMode("manual")
+    end)
+
+    itemEditorFrame.spellIDOption:SetScript("OnClick", function()
+        SetTrackingMode("spellID")
+    end)
+
+    itemEditorFrame.presetOption:SetScript("OnClick", function()
+        SetTrackingMode("preset")
+    end)
+
+    itemEditorFrame.SetTrackingMode = SetTrackingMode
+    SetTrackingMode("manual")
+
+    local saveButton = CreateFrame("Button", nil, itemEditorFrame, "UIPanelButtonTemplate")
+    saveButton:SetSize(90, 24)
+    saveButton:SetPoint("BOTTOMRIGHT", itemEditorFrame, "BOTTOMRIGHT", -116, 28)
+    saveButton:SetText("Save")
+
+    local cancelButton = CreateFrame("Button", nil, itemEditorFrame, "UIPanelButtonTemplate")
+    cancelButton:SetSize(90, 24)
+    cancelButton:SetPoint("LEFT", saveButton, "RIGHT", 12, 0)
+    cancelButton:SetText("Cancel")
+
+    cancelButton:SetScript("OnClick", function()
+        itemEditorFrame:Hide()
+    end)
+
+    saveButton:SetScript("OnClick", function()
+        local text = itemEditorFrame.nameBox:GetText() or ""
+        text = text:gsub("^%s+", ""):gsub("%s+$", "")
+
+        if text == "" then
+            print("PullCheck: item name cannot be blank.")
+            return
+        end
+
+        local newItem = {
+            text = text,
+            trackType = itemEditorFrame.trackingMode or "manual"
+        }
+
+        if newItem.trackType == "spellID" and itemEditorFrame.spellIDBox then
+            local spellID = tonumber(itemEditorFrame.spellIDBox:GetText() or "")
+
+            if spellID then
+                newItem.spellID = spellID
+            end
+        end
+
+        table.insert(GetItems(), newItem)
+
+        if configFrame and configFrame.inputBox then
+            configFrame.inputBox:SetText("")
+        end
+
+        itemEditorFrame:Hide()
+        RefreshConfigList()
+
+        print("PullCheck added: " .. text)
+    end)
+
+    itemEditorFrame.nameBox:SetScript("OnEnterPressed", function()
+        saveButton:Click()
+    end)
+end
+
+local function ShowItemEditor(text)
+    if not itemEditorFrame then
+        CreateItemEditorFrame()
+    end
+
+    itemEditorFrame.nameBox:SetText(text or "")
+    itemEditorFrame.nameBox:HighlightText()
+
+    if itemEditorFrame.spellIDBox then
+        itemEditorFrame.spellIDBox:SetText("")
+    end
+
+    if itemEditorFrame.SetTrackingMode then
+        itemEditorFrame.SetTrackingMode("manual")
+    end
+
+    if configFrame then
+        itemEditorFrame:SetFrameLevel(configFrame:GetFrameLevel() + 20)
+    end
+
+    itemEditorFrame:Show()
+    itemEditorFrame.nameBox:SetFocus()
+end
+
+local function OpenItemEditorFromInput()
+    if not configFrame then
+        return
+    end
+
+    local text = configFrame.inputBox:GetText() or ""
+    text = text:gsub("^%s+", ""):gsub("%s+$", "")
+
+    if text == "" then
+        print("PullCheck: type something to add first.")
+        return
+    end
+
+    ShowItemEditor(text)
+end
+
 local function CreateConfigFrame()
     configFrame = CreateFrame("Frame", "PullCheckConfigFrame", UIParent, "BackdropTemplate")
     configFrame:SetSize(680, 560)
@@ -450,30 +704,26 @@ local function CreateConfigFrame()
     divider:SetPoint("TOPRIGHT", configFrame, "TOPRIGHT", -30, -132)
     divider:SetHeight(1)
 
-    local addHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    addHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -152)
-    addHeader:SetText("Add checklist item")
-
-    configFrame.inputBox = CreateFrame("EditBox", nil, configFrame, "InputBoxTemplate")
-    configFrame.inputBox:SetSize(440, 24)
-    configFrame.inputBox:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 36, -184)
-    configFrame.inputBox:SetAutoFocus(false)
-
-    configFrame.inputBox:SetScript("OnEnterPressed", function()
-        AddItemFromInput()
-    end)
+    local checklistHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    checklistHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -152)
+    checklistHeader:SetText("Checklist items")
 
     local addButton = CreateFrame("Button", nil, configFrame, "UIPanelButtonTemplate")
-    addButton:SetSize(82, 24)
-    addButton:SetPoint("LEFT", configFrame.inputBox, "RIGHT", 14, 0)
-    addButton:SetText("Add +")
+    addButton:SetSize(180, 28)
+    addButton:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 36, -184)
+    addButton:SetText("Add Checklist Item")
+
     addButton:SetScript("OnClick", function()
-        AddItemFromInput()
+        ShowItemEditor("")
     end)
 
-    local listHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    listHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -224)
-    listHeader:SetText("Checklist items")
+    local typeHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    typeHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 76, -224)
+    typeHeader:SetText("Type")
+
+    local itemHeader = configFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    itemHeader:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 156, -224)
+    itemHeader:SetText("Item")
 
     configFrame.scrollFrame = CreateFrame("ScrollFrame", "PullCheckItemScrollFrame", configFrame, "UIPanelScrollFrameTemplate")
     configFrame.scrollFrame:SetPoint("TOPLEFT", configFrame, "TOPLEFT", 32, -252)
