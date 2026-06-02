@@ -2,7 +2,7 @@
 ## Title: PullCheck
 ## Notes: Customizable checklist that appears when a ready check is performed.
 ## Author: hatters{Ally}
-## Version: 1.0.0
+## Version: 2.0.0
 ## SavedVariables: PullCheckDB
 ## SavedVariablesPerCharacter: PullCheckCharDB
 
